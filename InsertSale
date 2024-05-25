@@ -51,9 +51,17 @@ def add_sale_detail(product_name, quantity, selected_department_id):
         print("Product not found in selected department.")
         return
     
+    cursor = conn.cursor()
+    cursor.execute("SELECT Price FROM product WHERE ProductID = ?", (product_id,))
+    product_price = cursor.fetchone()[0]
+    cursor.close()  # Close the cursor
+    
+    line_total = product_price * quantity
+    
     sale_details.append({
         "ProductID": product_id,
-        "Quantity": quantity
+        "Quantity": quantity,
+        "LineTotal": line_total
     })
 
 # Function to insert sale into database
@@ -79,23 +87,22 @@ def insert_sale(member_code, selected_media):
     sale_datetime = datetime.datetime.now()
     
     try:
+        # Calculate total amount
+        total_amount = sum(detail["LineTotal"] for detail in sale_details)
+        
         # Insert sale into sale table
         cursor.execute("""
             INSERT INTO sale (SaleDate, MemberID, TerminalID, MediaID, TotalAmount, TableID)
             OUTPUT inserted.SaleID  -- Retrieve SaleID immediately after insertion
             VALUES (?, ?, ?, ?, ?, ?)
-            """, (sale_datetime, member_id, terminal_id, media_id, 0, None))
+            """, (sale_datetime, member_id, terminal_id, media_id, total_amount, None))
         sale_id = cursor.fetchone()[0]  # Retrieve SaleID
         
         # Insert sale items into saleitem table using the retrieved sale_id
         for detail in sale_details:
             product_id = detail["ProductID"]
             quantity = detail["Quantity"]
-            
-            # Calculate line total
-            cursor.execute("SELECT Price FROM product WHERE ProductID = ?", (product_id,))
-            product_price = cursor.fetchone()[0]
-            line_total = product_price * quantity
+            line_total = detail["LineTotal"]
             
             # Insert sale item into saleitem table using the retrieved sale_id
             cursor.execute("INSERT INTO saleitem (SaleID, ProductID, Quantity, LineTotal) VALUES (?, ?, ?, ?)", 
@@ -113,52 +120,65 @@ def insert_sale(member_code, selected_media):
 # Get user input for ordering
 cursor = conn.cursor()
 
-# Loop for ordering
+# Outer loop for handling multiple customers
 while True:
-    # Get user input for department
-    cursor.execute("SELECT DepartmentName FROM department")
-    departments = [row.DepartmentName for row in cursor.fetchall()]
-    print("Available departments:")
-    for i, department in enumerate(departments):
-        print(f"{i+1}. {department}")
-    department_choice = int(input("Select department: "))
-    selected_department_name = departments[department_choice - 1]
-    selected_department_id = get_department_id(selected_department_name)
+    # Loop for ordering
+    while True:
+        # Get user input for department
+        cursor.execute("SELECT DepartmentName FROM department")
+        departments = [row.DepartmentName for row in cursor.fetchall()]
+        print("Available departments:")
+        for i, department in enumerate(departments):
+            print(f"{i+1}. {department}")
+        department_choice = int(input("Select department: "))
+        selected_department_name = departments[department_choice - 1]
+        selected_department_id = get_department_id(selected_department_name)
 
-    # Get user input for product
-    cursor.execute("SELECT ProductName FROM product WHERE DepartmentID = ?", (selected_department_id,))
-    products = [row.ProductName for row in cursor.fetchall()]
-    print(f"Available products in {selected_department_name}:")
-    for i, product in enumerate(products):
-        print(f"{i+1}. {product}")
-    product_choice = int(input("Select product: "))
-    selected_product_name = products[product_choice - 1]
+        # Check if there are products in the selected department
+        cursor.execute("SELECT COUNT(*) FROM product WHERE DepartmentID = ?", (selected_department_id,))
+        product_count = cursor.fetchone()[0]
+        if product_count == 0:
+            print("Sorry, there are no products in that department! Please choose a different department.")
+            continue
 
-    # Get user input for quantity
-    quantity = int(input("Enter quantity: "))
+        # Get user input for product
+        cursor.execute("SELECT ProductName FROM product WHERE DepartmentID = ?", (selected_department_id,))
+        products = [row.ProductName for row in cursor.fetchall()]
+        print(f"Available products in {selected_department_name}:")
+        for i, product in enumerate(products):
+            print(f"{i+1}. {product}")
+        product_choice = int(input("Select product: "))
+        selected_product_name = products[product_choice - 1]
 
-    # Add sale detail to the global list
-    add_sale_detail(selected_product_name, quantity, selected_department_id)
+        # Get user input for quantity
+        quantity = int(input("Enter quantity: "))
 
-    # Ask if the user wants to order anything else
-    order_another = input("Would you like to order anything else? (yes/no): ").lower()
-    if order_another != "yes":
+        # Add sale detail to the global list
+        add_sale_detail(selected_product_name, quantity, selected_department_id)
+
+        # Ask if the user wants to order anything else
+        order_another = input("Would you like to order anything else? (yes/no): ").lower()
+        if order_another != "yes":
+            break
+
+    # Get user input for membership
+    member_code = input("Enter member code (optional, press Enter if not applicable): ")
+
+    # Get user input for media
+    print("Available media for payment:")
+    cursor.execute("SELECT MediaType FROM media")
+    media_options = [row.MediaType for row in cursor.fetchall()]
+    for i, media in enumerate(media_options):
+        print(f"{i+1}. {media}")
+    media_choice = int(input("Select payment media: "))
+    selected_media = media_options[media_choice - 1]
+    # Finalize the transaction
+    print("Finalizing transaction...")
+    insert_sale(member_code, selected_media)
+
+    # Ask if there is another customer
+    another_customer = input("Is there another customer? (yes/no): ").lower()
+    if another_customer != "yes":
         break
 
-# Get user input for membership
-member_code = input("Enter member code (optional, press Enter if not applicable): ")
-
-# Get user input for media
-print("Available media for payment:")
-cursor.execute("SELECT MediaType FROM media")
-media_options = [row.MediaType for row in cursor.fetchall()]
-for i, media in enumerate(media_options):
-    print(f"{i+1}. {media}")
-media_choice = int(input("Select payment media: "))
-selected_media = media_options[media_choice - 1]
-# Finalize the transaction
-print("Finalizing transaction...")
-insert_sale(member_code, selected_media)
-
-# Close the cursor after the main transaction is complete
-cursor.close()
+# Close the cursor after all transactions are complete
