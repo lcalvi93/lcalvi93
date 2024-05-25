@@ -1,0 +1,133 @@
+import pyodbc
+import datetime
+
+# Database connection settings
+server = '192.168.50.75'
+database = 'SalesPracticeDB'
+username = 'test'
+password = 'test'
+conn = pyodbc.connect('DRIVER={SQL Server};SERVER='+server+';DATABASE='+database+';UID='+username+';PWD='+ password)
+
+# Function to get department ID from department name
+def get_department_id(department_name):
+    cursor.execute("SELECT DepartmentID FROM department WHERE DepartmentName = ?", (department_name,))
+    row = cursor.fetchone()
+    if row:
+        return row[0]
+    else:
+        return None
+
+# Function to get product ID from product name and department ID
+def get_product_id(product_name, department_id):
+    cursor.execute("SELECT ProductID FROM product WHERE ProductName = ? AND DepartmentID = ?", (product_name, department_id))
+    row = cursor.fetchone()
+    if row:
+        return row[0]
+    else:
+        return None
+
+# Function to get member ID from member code
+def get_member_id(member_code):
+    cursor.execute("SELECT MemberID FROM member WHERE MemberCode = ?", (member_code,))
+    row = cursor.fetchone()
+    if row:
+        return row[0]
+    else:
+        return None
+
+# Main function to insert sale into database
+def insert_sale(product_name, quantity, member_code, selected_media, selected_department_id):
+    cursor = conn.cursor()  # Establish a cursor for this function
+    product_id = get_product_id(product_name, selected_department_id)
+    if product_id is None:
+        print("Product not found in selected department.")
+        return
+    
+    member_id = get_member_id(member_code)
+    terminal_id = 1  # Assuming terminal ID 1 is for the Bar
+    
+    # Get media ID
+    if selected_media:
+        cursor.execute("SELECT MediaID FROM media WHERE MediaType = ?", (selected_media,))
+        row = cursor.fetchone()
+        if row:
+            media_id = row[0]
+        else:
+            print("Invalid media type.")
+            return
+    else:
+        media_id = None
+    
+    # Get current date and time
+    sale_datetime = datetime.datetime.now()
+    
+    try:
+        # Insert sale into sale table
+        cursor.execute("""
+            INSERT INTO sale (SaleDate, MemberID, TerminalID, MediaID, TotalAmount, TableID)
+            OUTPUT inserted.SaleID  -- Retrieve SaleID immediately after insertion
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (sale_datetime, member_id, terminal_id, media_id, 0, None))
+        sale_id = cursor.fetchone()[0]  # Retrieve SaleID
+        
+        # Calculate line total
+        cursor.execute("SELECT Price FROM product WHERE ProductName = ?", (product_name,))
+        product_price = cursor.fetchone()[0]
+        line_total = product_price * quantity
+        
+        # Insert sale item into saleitem table using the retrieved sale_id
+        cursor.execute("INSERT INTO saleitem (SaleID, ProductID, Quantity, LineTotal) VALUES (?, ?, ?, ?)", 
+                       (sale_id, product_id, quantity, line_total))
+        conn.commit()
+        
+        print("Sale inserted successfully.")
+    except Exception as e:
+        conn.rollback()  # Rollback transaction if an error occurs
+        print("Error inserting sale:", e)
+
+# Get user input for ordering
+cursor = conn.cursor()
+
+# Loop for ordering
+while True:
+    # Get user input for department
+    cursor.execute("SELECT DepartmentName FROM department")
+    departments = [row.DepartmentName for row in cursor.fetchall()]
+    print("Available departments:")
+    for i, department in enumerate(departments):
+        print(f"{i+1}. {department}")
+    department_choice = int(input("Select department: "))
+    selected_department_name = departments[department_choice - 1]
+    selected_department_id = get_department_id(selected_department_name)
+
+    # Get user input for product
+    cursor.execute("SELECT ProductName FROM product WHERE DepartmentID = ?", (selected_department_id,))
+    products = [row.ProductName for row in cursor.fetchall()]
+    print(f"Available products in {selected_department_name}:")
+    for i, product in enumerate(products):
+        print(f"{i+1}. {product}")
+    product_choice = int(input("Select product: "))
+    selected_product_name = products[product_choice - 1]
+
+    # Get user input for quantity
+    quantity = int(input("Enter quantity: "))
+
+    # Get user input for member code (optional)
+    member_code = input("Enter member code (optional, press Enter if not applicable): ")
+
+    # Get user input for media
+    print("Available media for payment:")
+    cursor.execute("SELECT MediaType FROM media")
+    media_options = [row.MediaType for row in cursor.fetchall()]
+    for i, media in enumerate(media_options):
+        print(f"{i+1}. {media}")
+    media_choice = int(input("Select payment media: "))
+    selected_media = media_options[media_choice - 1]
+
+    # Execute insert_sale function
+    insert_sale(selected_product_name, quantity, member_code, selected_media, selected_department_id)
+
+    # Ask if the user wants to order anything else
+    order_another = input("Would you like to order anything else? (yes/no): ").lower()
+    if order_another == "no":
+        break
